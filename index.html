@@ -409,6 +409,122 @@ const BOSS_SHOT_DELAY = 1200;
 let bossBullets = [];
 
 // =========================================================
+// GAMEPAD ADD-ON — XBOX / PS4 / PS5 CONTROLLER SUPPORT
+// Added: Start button = ESC/Menu, L2/R2 = Select Stage 1 & 2, Button A = Jump (Stage 1)
+// =========================================================
+let gamepadIndex = null;
+const GAMEPAD_DEADZONE = 0.18;
+let gamepadLeft = false;
+let gamepadRight = false;
+let gamepadUp = false;
+let gamepadDown = false;
+let gamepadFire = false;
+let gamepadStart = false;
+let gamepadL2 = false;
+let gamepadR2 = false;
+
+let prevGamepadStart = false;
+let prevGamepadL2 = false;
+let prevGamepadR2 = false;
+let prevGamepadFire = false;
+
+function pollGamepad() {
+    gamepadLeft = gamepadRight = gamepadUp = gamepadDown = gamepadFire = false;
+    gamepadStart = gamepadL2 = gamepadR2 = false;
+
+    if (!navigator.getGamepads) return;
+
+    const pads = navigator.getGamepads();
+    let pad = null;
+
+    if (gamepadIndex !== null && pads[gamepadIndex]) {
+        pad = pads[gamepadIndex];
+    } else {
+        for (let i = 0; i < pads.length; i++) {
+            if (pads[i]) {
+                pad = pads[i];
+                gamepadIndex = i;
+                break;
+            }
+        }
+    }
+
+    if (!pad) return;
+
+    const x = pad.axes[0] || 0;
+    const y = pad.axes[1] || 0;
+
+    gamepadLeft  = x < -GAMEPAD_DEADZONE;
+    gamepadRight = x >  GAMEPAD_DEADZONE;
+    gamepadUp    = y < -GAMEPAD_DEADZONE;
+    gamepadDown  = y >  GAMEPAD_DEADZONE;
+
+    // Button 0 (Xbox A / PS Cross) = Action / Jump / Fire
+    gamepadFire = !!(pad.buttons[0] && pad.buttons[0].pressed);
+
+    // Button 9 = Start / Options
+    gamepadStart = !!(pad.buttons[9] && pad.buttons[9].pressed);
+
+    // L2 / R2 triggers (Axes 2/5 or Buttons 6/7)
+    let l2Axis = (pad.axes[2] !== undefined) ? pad.axes[2] : -1;
+    let r2Axis = (pad.axes[5] !== undefined) ? pad.axes[5] : -1;
+    let l2Btn = pad.buttons[6] ? pad.buttons[6].pressed : false;
+    let r2Btn = pad.buttons[7] ? pad.buttons[7].pressed : false;
+
+    gamepadL2 = l2Btn || (l2Axis > -0.5);
+    gamepadR2 = r2Btn || (r2Axis > -0.5);
+}
+
+function handleGamepadControls() {
+    // 1. กดปุ่ม Start เพื่อออกจากด่านกลับมาหน้า Menu (เทียบเท่า ESC)
+    if (gamepadStart && !prevGamepadStart) {
+        if (currentStage !== STAGE_MENU && currentStage !== STAGE_CUTSCENE) {
+            goToMenu();
+        }
+    }
+
+    // 2. อยู่หน้า Menu เลือกด่านด้วย L2 (ด่าน 1) และ R2 (ด่าน 2)
+    if (currentStage === STAGE_MENU) {
+        if (gamepadL2 && !prevGamepadL2) {
+            startCutsceneBeforeStage1();
+        }
+        if (gamepadR2 && !prevGamepadR2) {
+            startStage2();
+        }
+    }
+
+    // 3. รองรับปุ่ม A (gamepadFire) สำหรับกระโดดในด่านที่ 1 (Flappy Bird)
+    if (currentStage === STAGE_FLAPPY) {
+        if (gamepadFire && !prevGamepadFire) {
+            if (stage1GameOver) {
+                resetFlappy();
+                playMusic(sounds.bgmStage1);
+            } else {
+                birdVelocity = JUMP_FORCE;
+                playSound(sounds.jump);
+                spawnParticles(BIRD_X - 20, birdY + 20, "#ff9900", 12, 120);
+            }
+        }
+    }
+
+    prevGamepadStart = gamepadStart;
+    prevGamepadL2 = gamepadL2;
+    prevGamepadR2 = gamepadR2;
+    prevGamepadFire = gamepadFire;
+}
+
+window.addEventListener("gamepadconnected", e => {
+    gamepadIndex = e.gamepad.index;
+    console.log("Gamepad connected:", e.gamepad.id);
+});
+
+window.addEventListener("gamepaddisconnected", e => {
+    if (gamepadIndex === e.gamepad.index) {
+        gamepadIndex = null;
+    }
+});
+
+// =========================================================
 // ANALOG JOYSTICK LOGIC FOR MOBILE
 // =========================================================
 const analogStick = document.getElementById("analogStick");
@@ -738,6 +854,10 @@ function update(delta) {
     globalTime += delta;
     updateVFX(delta);
 
+    // ตรวจสอบสถานะจอยเกมในทุกๆ เฟรม
+    pollGamepad();
+    handleGamepadControls();
+
     if (currentStage === STAGE_FLAPPY) {
         if (!stage1GameOver) updateFlappy(delta);
     } else if (currentStage === STAGE_SHOOTER) {
@@ -848,6 +968,12 @@ function checkPipeCollision(pipe) {
 }
 
 function updateShooter(delta) {
+    if (keys["ArrowLeft"] || gamepadLeft) playerX -= NORMAL_PLAYER_SPEED * delta;
+    if (keys["ArrowRight"] || gamepadRight) playerX += NORMAL_PLAYER_SPEED * delta;
+    if (keys["ArrowUp"] || gamepadUp) playerY -= NORMAL_PLAYER_SPEED * delta;
+    if (keys["ArrowDown"] || gamepadDown) playerY += NORMAL_PLAYER_SPEED * delta;
+    if (keys["Space"] || gamepadFire) shoot();
+
     updatePlayer(delta);
     updateGoldModeTimer();
     updateTopUIKaijuBeam();
@@ -1360,8 +1486,8 @@ function drawMenu() {
     let select = "< SELECT STAGE >";
     ctx.fillText(select, SCREEN_WIDTH / 2 - ctx.measureText(select).width / 2, 230);
 
-    drawPixelButton(390, 290, 500, 80, "[ 1 ] ORIGINAL FLAPPY BIRD");
-    drawPixelButton(390, 410, 500, 80, "[ 2 ] METEOR SHOOTING BOSS");
+    drawPixelButton(390, 290, 500, 80, "[ 1 / L2 ] ORIGINAL FLAPPY BIRD");
+    drawPixelButton(390, 410, 500, 80, "[ 2 / R2 ] METEOR SHOOTING BOSS");
 
     ctx.font = "18px monospace";
     ctx.fillStyle = "#64748b";
@@ -1507,7 +1633,7 @@ function drawFlappy() {
 
         ctx.font = "24px monospace";
         ctx.fillStyle = "#ffffff";
-        let restart = "Tap PUSH or Space to Restart";
+        let restart = "Press A (Joy) or Space to Restart";
         ctx.fillText(restart, SCREEN_WIDTH / 2 - ctx.measureText(restart).width / 2, 390);
     }
 }
@@ -1788,7 +1914,7 @@ function drawShooter() {
 
         ctx.font = "24px monospace";
         ctx.fillStyle = "#ffffff";
-        let restart = "Tap PUSH or Space to Replay Stage 2";
+        let restart = "Press A (Joy) or Space to Replay Stage 2";
         ctx.fillText(restart, SCREEN_WIDTH / 2 - ctx.measureText(restart).width / 2, 390);
     }
 }
