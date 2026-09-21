@@ -220,7 +220,7 @@ sounds.bgmStage1 = loadSound(BASE_PATH + "BGM.wav", true);
 sounds.bgmStage2 = loadSound(BASE_PATH + "BGM2.wav", true);
 sounds.grandMusic = loadSound(BASE_PATH + "GRAND.wav", true);
 sounds.paradigmMusic = loadSound(BASE_PATH + "Paradigm.wav", true);
-sounds.finalMusic = loadSound(BASE_PATH + "Final.wav", true);
+sounds.finalMusic = loadSound(BASE_PATH + "Zeknova.wav", true);
 
 sounds.jump = loadSound(BASE_PATH + "JUMP.wav");
 sounds.coin = loadSound(BASE_PATH + "Coins.wav");
@@ -269,6 +269,38 @@ function stopAllMusic() {
 }
 
 // =========================================================
+// AUDIO KEEP-ALIVE (ป้องกันเสียงเพลง BGM หาย/หลุดกลางคัน)
+// =========================================================
+function checkAndResumeAudio() {
+    if (!soundOn) return;
+    let activeBGM = null;
+    if (currentStage === STAGE_FLAPPY && !stage1GameOver) {
+        activeBGM = sounds.bgmStage1;
+    } else if (currentStage === STAGE_SHOOTER) {
+        if (bossPhase === 3) activeBGM = sounds.finalMusic;
+        else if (bossPhase === 2) activeBGM = sounds.paradigmMusic;
+        else if (bossActive || bossWarning) activeBGM = sounds.grandMusic;
+        else activeBGM = sounds.bgmStage2;
+    } else if (currentStage === STAGE_MENU) {
+        activeBGM = sounds.intro;
+    }
+
+    if (activeBGM && activeBGM.paused) {
+        activeBGM.play().catch(() => {});
+    }
+}
+
+document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+        checkAndResumeAudio();
+    }
+});
+
+window.addEventListener("pointerdown", () => {
+    checkAndResumeAudio();
+}, { passive: true });
+
+// =========================================================
 // AUTO RESIZE CANVAS (RESPONSIVE FOR MOBILE & IPAD)
 // =========================================================
 const canvas = document.getElementById("gameCanvas");
@@ -306,6 +338,12 @@ let currentStage = STAGE_MENU;
 let keys = {};
 let lastFrameTime = performance.now();
 let globalTime = 0;
+
+// ตัวแปรสำหรับระบบเลือกเมนูด้านหน้า (ขึ้น/ลง และ Spacebar)
+let menuSelectedIndex = 0; // 0 = ด่าน 1, 1 = ด่าน 2
+let prevMenuUp = false;
+let prevMenuDown = false;
+let prevMenuSpace = false;
 
 let particles = [];
 let damageTexts = [];
@@ -410,7 +448,6 @@ let bossBullets = [];
 
 // =========================================================
 // GAMEPAD ADD-ON — XBOX / PS4 / PS5 CONTROLLER SUPPORT
-// Added: Start button = ESC/Menu, L2/R2 = Select Stage 1 & 2, Button A = Jump (Stage 1)
 // =========================================================
 let gamepadIndex = null;
 const GAMEPAD_DEADZONE = 0.18;
@@ -456,16 +493,16 @@ function pollGamepad() {
 
     gamepadLeft  = x < -GAMEPAD_DEADZONE;
     gamepadRight = x >  GAMEPAD_DEADZONE;
-    gamepadUp    = y < -GAMEPAD_DEADZONE;
-    gamepadDown  = y >  GAMEPAD_DEADZONE;
+    gamepadUp    = y < -GAMEPAD_DEADZONE || (pad.axes[1] !== undefined && pad.axes[1] < -GAMEPAD_DEADZONE) || (pad.buttons[12] && pad.buttons[12].pressed);
+    gamepadDown  = y >  GAMEPAD_DEADZONE || (pad.axes[1] !== undefined && pad.axes[1] >  GAMEPAD_DEADZONE) || (pad.buttons[13] && pad.buttons[13].pressed);
 
-    // Button 0 (Xbox A / PS Cross) = Action / Jump / Fire
+    // Button 0 (Xbox A / PS Cross) = Action / Jump / Fire / Select Menu
     gamepadFire = !!(pad.buttons[0] && pad.buttons[0].pressed);
 
     // Button 9 = Start / Options
     gamepadStart = !!(pad.buttons[9] && pad.buttons[9].pressed);
 
-    // L2 / R2 triggers (Axes 2/5 or Buttons 6/7)
+    // L2 / R2 triggers
     let l2Axis = (pad.axes[2] !== undefined) ? pad.axes[2] : -1;
     let r2Axis = (pad.axes[5] !== undefined) ? pad.axes[5] : -1;
     let l2Btn = pad.buttons[6] ? pad.buttons[6].pressed : false;
@@ -493,7 +530,7 @@ function handleGamepadControls() {
         }
     }
 
-    // 3. รองรับปุ่ม A (gamepadFire) สำหรับกระโดดในด่านที่ 1 (Flappy Bird)
+    // 3. รองรับปุ่ม A สำหรับกระโดดในด่านที่ 1 (Flappy Bird)
     if (currentStage === STAGE_FLAPPY) {
         if (gamepadFire && !prevGamepadFire) {
             if (stage1GameOver) {
@@ -854,9 +891,40 @@ function update(delta) {
     globalTime += delta;
     updateVFX(delta);
 
-    // ตรวจสอบสถานะจอยเกมในทุกๆ เฟรม
+    // ตรวจสอบสถานะจอยเกม
     pollGamepad();
     handleGamepadControls();
+
+    // ระบบควบคุมการกดเลือกด่านหน้าเมนูด้วยลูกศรขึ้น/ลง และ Spacebar / ปุ่ม A
+    if (currentStage === STAGE_MENU) {
+        let upPressed = keys["ArrowUp"] || keys["KeyW"] || gamepadUp;
+        let downPressed = keys["ArrowDown"] || keys["KeyS"] || gamepadDown;
+        let selectPressed = keys["Space"] || keys["Enter"] || gamepadFire;
+
+        if (upPressed && !prevMenuUp) {
+            menuSelectedIndex = (menuSelectedIndex - 1 + 2) % 2;
+            playSound(sounds.coin);
+        }
+        if (downPressed && !prevMenuDown) {
+            menuSelectedIndex = (menuSelectedIndex + 1) % 2;
+            playSound(sounds.coin);
+        }
+
+        if (selectPressed && !prevMenuSpace) {
+            if (menuSelectedIndex === 0) {
+                startCutsceneBeforeStage1();
+            } else {
+                startStage2();
+            }
+        }
+
+        prevMenuUp = upPressed;
+        prevMenuDown = downPressed;
+        prevMenuSpace = selectPressed;
+    }
+
+    // คอยเช็คและกู้คืนเสียง BGM ป้องกันเสียงหาย
+    checkAndResumeAudio();
 
     if (currentStage === STAGE_FLAPPY) {
         if (!stage1GameOver) updateFlappy(delta);
@@ -1042,7 +1110,7 @@ function updateTopUIKaijuBeam() {
                 width: 300,
                 height: 40,
                 isTopUI: true,
-                damage: 35.0,
+                damage: 10.0,
                 isTopUIBeam: true
             });
         }
@@ -1483,11 +1551,12 @@ function drawMenu() {
 
     ctx.font = "bold 26px monospace";
     ctx.fillStyle = "#94a3b8";
-    let select = "< SELECT STAGE >";
+    let select = "< UP/DOWN: SELECT | SPACE: ENTER >";
     ctx.fillText(select, SCREEN_WIDTH / 2 - ctx.measureText(select).width / 2, 230);
 
-    drawPixelButton(390, 290, 500, 80, "[ 1 / L2 ] ORIGINAL FLAPPY BIRD");
-    drawPixelButton(390, 410, 500, 80, "[ 2 / R2 ] METEOR SHOOTING BOSS");
+    // วาดปุ่มโดยไฮไลต์ปุ่มที่เลือก (menuSelectedIndex)
+    drawPixelButton(390, 290, 500, 80, "[ 1 / L2 ] ORIGINAL FLAPPY BIRD", menuSelectedIndex === 0);
+    drawPixelButton(390, 410, 500, 80, "[ 2 / R2 ] METEOR SHOOTING BOSS", menuSelectedIndex === 1);
 
     ctx.font = "18px monospace";
     ctx.fillStyle = "#64748b";
@@ -1495,16 +1564,17 @@ function drawMenu() {
     ctx.fillText(ctrl, SCREEN_WIDTH / 2 - ctx.measureText(ctrl).width / 2, 630);
 }
 
-function drawPixelButton(x, y, w, h, text) {
+function drawPixelButton(x, y, w, h, text, isSelected) {
     ctx.save();
-    ctx.fillStyle = "#090d16";
+    ctx.fillStyle = isSelected ? "#1e293b" : "#090d16";
     ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = "#38bdf8";
-    ctx.lineWidth = 2;
+
+    ctx.strokeStyle = isSelected ? "#facc15" : "#38bdf8";
+    ctx.lineWidth = isSelected ? 4 : 2;
     ctx.strokeRect(x, y, w, h);
 
     ctx.font = "bold 22px monospace";
-    ctx.fillStyle = "#f8fafc";
+    ctx.fillStyle = isSelected ? "#facc15" : "#f8fafc";
     let tw = ctx.measureText(text).width;
     ctx.fillText(text, x + (w - tw) / 2, y + h / 2 + 8);
     ctx.restore();
